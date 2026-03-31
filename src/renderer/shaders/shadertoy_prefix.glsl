@@ -28,6 +28,10 @@ layout(binding = 1, std140) uniform Globals {
     uniform vec3  iCursorText;
     uniform vec3  iSelectionForegroundColor;
     uniform vec3  iSelectionBackgroundColor;
+    uniform ivec4 iTitlePacked[32];
+    uniform int   iTitleLen;
+    uniform ivec4 iPwdPacked[32];
+    uniform int   iPwdLen;
 };
 
 #define CURSORSTYLE_BLOCK        0
@@ -47,6 +51,19 @@ layout(location = 0) in vec4 gl_FragCoord;
 layout(location = 0) out vec4 _fragColor;
 
 #define texture2D texture
+
+// Helper: extract the i-th character from the packed title array.
+// Returns the ASCII code (0–127) or 0 if i is out of range.
+int iTitleChar(int i) {
+    if (i < 0 || i >= iTitleLen) return 0;
+    return iTitlePacked[i / 4][i % 4];
+}
+
+// Helper: extract the i-th character from the packed pwd array.
+int iPwdChar(int i) {
+    if (i < 0 || i >= iPwdLen) return 0;
+    return iPwdPacked[i / 4][i % 4];
+}
 
 void mainImage( out vec4 fragColor, in vec2 fragCoord );
 void main() { mainImage (_fragColor, gl_FragCoord.xy); }
