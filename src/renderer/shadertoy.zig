@@ -37,6 +37,21 @@ pub const Uniforms = extern struct {
     cursor_text: [4]f32 align(16),
     selection_background_color: [4]f32 align(16),
     selection_foreground_color: [4]f32 align(16),
+
+    /// Window title as packed ivec4 array. Each ivec4 holds 4 ASCII
+    /// character codes, giving a maximum title length of 128 characters.
+    /// Access character i as: title_packed[i/4][i%4]
+    title_packed: [32][4]i32 align(16),
+
+    /// The number of characters in the title (0 = no title).
+    title_len: i32 align(4),
+
+    /// Working directory as packed ivec4 array (same encoding as title).
+    /// Set via OSC 7. Max 128 characters.
+    pwd_packed: [32][4]i32 align(16),
+
+    /// The number of characters in the working directory (0 = no pwd).
+    pwd_len: i32 align(4),
 };
 
 /// The target to load shaders for.

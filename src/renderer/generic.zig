@@ -769,6 +769,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     .cursor_text = @splat(0),
                     .selection_background_color = @splat(0),
                     .selection_foreground_color = @splat(0),
+                    .title_packed = @splat(@splat(0)),
+                    .title_len = 0,
+                    .pwd_packed = @splat(@splat(0)),
+                    .pwd_len = 0,
                 },
                 .bg_image_buffer = undefined,
 
@@ -1201,6 +1205,40 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
                 // Update our terminal state
                 try self.terminal_state.update(self.alloc, state.terminal);
+
+                // Copy the window title into custom shader uniforms.
+                // We do this inside the mutex because Terminal.getTitle()
+                // requires the terminal lock.
+                if (self.has_custom_shaders) {
+                    const uniforms: *shadertoy.Uniforms = &self.custom_shader_uniforms;
+                    // Zero the packed title array
+                    for (&uniforms.title_packed) |*vec| {
+                        vec.* = .{ 0, 0, 0, 0 };
+                    }
+                    if (state.terminal.getTitle()) |title| {
+                        const len: usize = @min(title.len, 128);
+                        uniforms.title_len = @intCast(len);
+                        for (0..len) |i| {
+                            uniforms.title_packed[i / 4][i % 4] = @intCast(title[i]);
+                        }
+                    } else {
+                        uniforms.title_len = 0;
+                    }
+
+                    // Copy the working directory (from OSC 7)
+                    for (&uniforms.pwd_packed) |*vec| {
+                        vec.* = .{ 0, 0, 0, 0 };
+                    }
+                    if (state.terminal.getPwd()) |pwd| {
+                        const plen: usize = @min(pwd.len, 128);
+                        uniforms.pwd_len = @intCast(plen);
+                        for (0..plen) |i| {
+                            uniforms.pwd_packed[i / 4][i % 4] = @intCast(pwd[i]);
+                        }
+                    } else {
+                        uniforms.pwd_len = 0;
+                    }
+                }
 
                 // If our terminal state is dirty at all we need to redo
                 // the viewport search.
@@ -2091,7 +2129,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             uniforms.cursor_visible = @intFromBool(self.terminal_state.cursor.visible);
 
             // Cursor style
-            const cursor_style: renderer.CursorStyle = .fromTerminal(self.terminal_state.cursor.visual_style);
+            const cursor_style: renderer.CursorStyle = if (self.terminal_state.cursor.password_input)
+                .lock
+            else
+                .fromTerminal(self.terminal_state.cursor.visual_style);
             uniforms.previous_cursor_style = uniforms.current_cursor_style;
             uniforms.current_cursor_style = @as(i32, @intFromEnum(cursor_style));
         }
