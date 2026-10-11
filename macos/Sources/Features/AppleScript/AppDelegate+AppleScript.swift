@@ -329,7 +329,10 @@ extension NSApplication {
 
     /// All terminal controllers in front-to-back order.
     fileprivate var orderedTerminalControllers: [BaseTerminalController] {
-        NSApp.orderedWindows.compactMap { $0.windowController as? BaseTerminalController }
+        // Background tabs are ordered out, so they are appended after the on-screen windows.
+        let ordered = NSApp.orderedWindows.compactMap { $0.windowController as? BaseTerminalController }
+        let hidden = TerminalController.all.filter { controller in !ordered.contains { $0 === controller } }
+        return ordered + hidden
     }
 
     /// Identifies the primary tab controller for a window's tab group.
@@ -341,6 +344,11 @@ extension NSApplication {
     /// For tabbed windows, "primary" is currently the first controller in the
     /// tab group's ordered windows list.
     fileprivate func primaryTerminalController(for controller: BaseTerminalController) -> BaseTerminalController? {
+        // A project is one scripting window; its first tab represents it.
+        if let controller = controller as? TerminalController {
+            return ProjectStore.shared.tabControllers(project: controller.projectSequence).first ?? controller
+        }
+
         guard let window = controller.window else { return nil }
         guard let tabGroup = window.tabGroup else { return controller }
 

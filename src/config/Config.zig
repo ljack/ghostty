@@ -7266,22 +7266,22 @@ pub const Keybinds = struct {
             try self.set.put(
                 alloc,
                 .{ .key = .{ .physical = .arrow_up }, .mods = .{ .super = true, .alt = true } },
-                .{ .goto_split = .up },
+                .{ .goto_window = .previous },
             );
             try self.set.put(
                 alloc,
                 .{ .key = .{ .physical = .arrow_down }, .mods = .{ .super = true, .alt = true } },
-                .{ .goto_split = .down },
+                .{ .goto_window = .next },
             );
             try self.set.put(
                 alloc,
                 .{ .key = .{ .physical = .arrow_left }, .mods = .{ .super = true, .alt = true } },
-                .{ .goto_split = .left },
+                .{ .previous_tab = {} },
             );
             try self.set.put(
                 alloc,
                 .{ .key = .{ .physical = .arrow_right }, .mods = .{ .super = true, .alt = true } },
-                .{ .goto_split = .right },
+                .{ .next_tab = {} },
             );
             try self.set.put(
                 alloc,

@@ -58,6 +58,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// The configuration derived from the Ghostty config so we don't need to rely on references.
     private(set) var derivedConfig: DerivedConfig
 
+    /// The project this tab belongs to. Tabs inherit it from the tab they were opened from,
+    /// new windows start a new project. See `ProjectStore`.
+    var projectSequence: Int = ProjectStore.shared.newSequence()
+
+    /// The directory the project was opened in. It stays fixed when the shell changes directory.
+    var projectDirectory: URL?
+
+    /// The tab's position within its project. Lower values are further left.
+    var tabSequence: Int = ProjectStore.shared.newSequence()
+
     /// The notification cancellable for focused surface property changes.
     private var surfaceAppearanceCancellables: Set<AnyCancellable> = []
 
@@ -75,6 +85,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // Setup our initial derived config based on the current app config
         self.derivedConfig = DerivedConfig(ghostty.config)
+        self.projectDirectory = base?.workingDirectory.map { URL(fileURLWithPath: $0, isDirectory: true) }
 
         super.init(ghostty, baseConfig: base, surfaceTree: tree)
 
@@ -222,6 +233,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     private static func applyCascade(to window: NSWindow, hasFixedPos: Bool) {
         if hasFixedPos { return }
+
+        // Tab windows share one frame (see ProjectStore); only the first one is placed.
+        if all.contains(where: { $0.window !== window }) { return }
 
         if all.count > 1 {
             lastCascadePoint = window.cascadeTopLeft(from: lastCascadePoint)
@@ -444,6 +458,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // Create a new window and add it to the parent
         let controller = TerminalController.init(ghostty, withBaseConfig: baseConfig)
         controller.isBackgroundOpaque = parentController.isBackgroundOpaque
+        ProjectStore.shared.insertTab(controller, after: parentController)
         guard let window = controller.window else { return controller }
 
         // If the parent is miniaturized, then macOS exhibits really strange behaviors
@@ -593,6 +608,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// changes, when a window is closed, and when tabs are reordered
     /// with the mouse.
     func relabelTabs() {
+        ProjectStore.shared.refresh()
+
         // We only listen for frame changes if we have more than 1 window,
         // otherwise the accessory view doesn't matter.
         tabListenForFrame = window?.tabbedWindows?.count ?? 0 > 1
@@ -1114,7 +1131,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // Initialize our content view to the SwiftUI root
         let container = TerminalViewContainer {
-            TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            ProjectWindowView(controller: self) {
+                TerminalView(ghostty: self.ghostty, viewModel: self, delegate: self)
+            }
         }
 
         // Set the initial content size on the container so that
@@ -1124,6 +1143,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         container.initialContentSize = focusedSurface?.initialSize
 
         window.contentView = container
+
+        // The project sidebar and tab strip draw the titlebar area themselves.
+        window.styleMask.insert(.fullSizeContentView)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
 
         // If we have a default size, we want to apply it.
         if let defaultSize {
@@ -1198,6 +1222,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         super.showWindow(sender)
+
+        // This tab replaces the one on screen, see ProjectStore.
+        ProjectStore.shared.show(terminalWindow)
 
         syncAppearance()
     }
@@ -1510,6 +1537,14 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     // MARK: - TerminalViewDelegate
 
+    override func pwdDidChange(to: URL?) {
+        super.pwdDidChange(to: to)
+        if projectDirectory == nil, let to {
+            projectDirectory = to
+            ProjectStore.shared.refresh()
+        }
+    }
+
     override func focusedSurfaceDidChange(to: Ghostty.SurfaceView?) {
         super.focusedSurfaceDidChange(to: to)
 
@@ -1553,58 +1588,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard let action = notification.userInfo?[Notification.Name.GhosttyMoveTabKey] as? Ghostty.Action.MoveTab else { return }
         guard action.amount != 0 else { return }
 
-        // Determine our current selected index
-        guard let windowController = window.windowController else { return }
-        guard let tabGroup = windowController.window?.tabGroup else { return }
-        guard let selectedWindow = tabGroup.selectedWindow else { return }
-        let tabbedWindows = tabGroup.windows
-        guard tabbedWindows.count > 0 else { return }
-        guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return }
-
-        // Determine the final index we want to insert our tab
-        let finalIndex: Int
-        if action.amount < 0 {
-            finalIndex = selectedIndex - min(selectedIndex, -action.amount)
-        } else {
-            let remaining: Int = tabbedWindows.count - 1 - selectedIndex
-            finalIndex = selectedIndex + min(remaining, action.amount)
-        }
-
-        // If our index is the same we do nothing
-        guard finalIndex != selectedIndex else { return }
-
-        // Get our target window
-        let targetWindow = tabbedWindows[finalIndex]
-
-        // Moving tabs on macOS 26 RC causes very nasty visual glitches in the titlebar tabs.
-        // I believe this is due to messed up constraints for our hacky tab bar. I'd like to
-        // find a better workaround. For now, this improves things dramatically.
-        //
-        // Reproduction: titlebar tabs, create two tabs, "move tab left"
-        if #available(macOS 26, *) {
-            if window is TitlebarTabsTahoeTerminalWindow {
-                tabGroup.removeWindow(selectedWindow)
-                targetWindow.addTabbedWindowSafely(selectedWindow, ordered: action.amount < 0 ? .below : .above)
-                DispatchQueue.main.async {
-                    selectedWindow.makeKey()
-                }
-
-                return
-            }
-        }
-
-        // Begin a group of window operations to minimize visual updates
-        NSAnimationContext.beginGrouping()
-        NSAnimationContext.current.duration = 0
-
-        // Remove and re-add the window in the correct position
-        tabGroup.removeWindow(selectedWindow)
-        targetWindow.addTabbedWindowSafely(selectedWindow, ordered: action.amount < 0 ? .below : .above)
-
-        // Ensure our window remains selected
-        selectedWindow.makeKey()
-
-        NSAnimationContext.endGrouping()
+        ProjectStore.shared.moveTab(window, by: action.amount)
     }
 
     @objc private func onGotoTab(notification: SwiftUI.Notification) {
@@ -1617,17 +1601,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard let tabEnum = tabEnumAny as? ghostty_action_goto_tab_e else { return }
         let tabIndex: Int32 = tabEnum.rawValue
 
-        guard let windowController = window.windowController else { return }
-        guard let tabGroup = windowController.window?.tabGroup else { return }
-        let tabbedWindows = tabGroup.windows
+        // Tabs are the windows of our project, see ProjectStore.
+        let tabbedWindows = ProjectStore.shared.tabWindows(containing: window)
+        guard !tabbedWindows.isEmpty else { return }
 
         // This will be the index we want to actual go to
         let finalIndex: Int
 
         // An index that is invalid is used to signal some special values.
         if tabIndex <= 0 {
-            guard let selectedWindow = tabGroup.selectedWindow else { return }
-            guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == selectedWindow }) else { return }
+            guard let selectedIndex = tabbedWindows.firstIndex(where: { $0 == window }) else { return }
 
             if tabIndex == GHOSTTY_GOTO_TAB_PREVIOUS.rawValue {
                 if selectedIndex == 0 {
@@ -1655,8 +1638,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         guard finalIndex >= 0 else { return }
-        let targetWindow = tabbedWindows[finalIndex]
-        targetWindow.makeKeyAndOrderFront(nil)
+        ProjectStore.shared.activate(window: tabbedWindows[finalIndex])
     }
 
     @objc private func onCloseTab(notification: SwiftUI.Notification) {
