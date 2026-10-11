@@ -144,6 +144,10 @@ final class ScriptWindow: NSObject {
     private var controllers: [BaseTerminalController] {
         guard NSApp.isAppleScriptEnabled else { return [] }
         guard let primaryController else { return [] }
+        if let project = primaryController as? TerminalController {
+            let tabs = ProjectStore.shared.tabControllers(project: project.projectSequence)
+            return tabs.isEmpty ? [primaryController] : tabs
+        }
         guard let window = primaryController.window else { return [primaryController] }
 
         if let tabGroup = window.tabGroup {
@@ -164,6 +168,9 @@ final class ScriptWindow: NSObject {
     /// non-tabbed windows we fall back to the primary controller.
     private var selectedController: BaseTerminalController? {
         guard let primaryController else { return nil }
+        if let project = primaryController as? TerminalController {
+            return ProjectStore.shared.selectedController(project: project.projectSequence) ?? primaryController
+        }
         guard let window = primaryController.window else { return primaryController }
 
         if let tabGroup = window.tabGroup,
@@ -237,6 +244,10 @@ extension ScriptWindow {
     /// - Standalone windows are keyed by window identity.
     /// - Detached controllers fall back to controller identity.
     static func stableID(primaryController: BaseTerminalController) -> String {
+        if let project = primaryController as? TerminalController {
+            return "project-\(project.projectSequence)"
+        }
+
         guard let window = primaryController.window else {
             return "controller-\(ObjectIdentifier(primaryController).hexString)"
         }
